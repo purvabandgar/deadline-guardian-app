@@ -136,3 +136,44 @@ Include 3 to 5 schedule blocks. Keep every string short (under 20 words).
     return fallback
   }
 }
+
+/**
+ * Breaks a high-level goal into concrete subtasks with deadlines.
+ * Returns an array: [{ title: string, deadline: string (ISO) }]
+ * The deadline is calculated relative to `now` and the user's final goal deadline.
+ */
+export async function getGoalBreakdown(goalText, goalDeadline) {
+  const now = new Date()
+
+  const prompt = `
+You are Deadline Guardian AI, an autonomous task-planning agent.
+
+The user has a goal: "${goalText}"
+This goal must be fully completed by: ${new Date(goalDeadline).toLocaleString()}
+Current time: ${now.toLocaleString()}
+
+Break this goal into 3 to 6 concrete, actionable subtasks that lead to completing it on time.
+Distribute realistic deadlines for each subtask between now and the final deadline,
+so the user has a clear day-by-day path instead of doing everything at the last minute.
+
+Return ONLY valid JSON, no markdown, no backticks, no extra text. Use EXACTLY this shape:
+
+{
+  "subtasks": [
+    { "title": "string - short actionable subtask", "deadline": "ISO 8601 datetime string" }
+  ]
+}
+
+Every deadline must be a real ISO datetime between now (${now.toISOString()}) and the final deadline (${new Date(goalDeadline).toISOString()}).
+`
+
+  try {
+    const raw = await callGemini(prompt)
+    const cleaned = raw.replace(/```json|```/g, "").trim()
+    const parsed = JSON.parse(cleaned)
+    return Array.isArray(parsed.subtasks) ? parsed.subtasks : []
+  } catch (err) {
+    console.error("getGoalBreakdown failed:", err)
+    return []
+  }
+}

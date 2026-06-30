@@ -10,9 +10,10 @@ import {
   query,
   where,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore'
-import { Plus, Trash2, Clock, AlertTriangle, CheckCircle2, ListTodo, Bot, Loader2, Sparkles, CalendarClock } from 'lucide-react'
-import { getAISuggestion, getAIPlan } from '../services/gemini'
+import { Plus, Trash2, Clock, AlertTriangle, CheckCircle2, ListTodo, Bot, Loader2, Sparkles, CalendarClock, Target } from 'lucide-react'
+import { getAISuggestion, getAIPlan, getGoalBreakdown } from '../services/gemini'
 import confetti from 'canvas-confetti'
 
 function Dashboard() {
@@ -27,6 +28,13 @@ function Dashboard() {
   // AI Daily Planner state
   const [plan, setPlan] = useState(null)
   const [planLoading, setPlanLoading] = useState(false)
+
+  // AI Goal Breakdown state
+  const [goalText, setGoalText] = useState('')
+  const [goalDeadline, setGoalDeadline] = useState('')
+  const [goalLoading, setGoalLoading] = useState(false)
+  const [proposedSubtasks, setProposedSubtasks] = useState(null) // null = no proposal yet
+  const [goalError, setGoalError] = useState('')
 
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
@@ -125,11 +133,6 @@ function Dashboard() {
   const onTrackCount = tasks.filter((t) => getUrgency(t.deadline).key === 'low').length
 
   // ---- Productivity Score ----
-  // NOTE: tasks are deleted on completion rather than marked "done", so there's
-  // no real completion history in this schema yet. This score is a "task health"
-  // proxy based on the proportion of tasks that are NOT overdue right now.
-  // To make this a true completion-based score later, add a `completed: boolean`
-  // field on task docs instead of deleting them, and compute from that.
   const productivityScore =
     tasks.length === 0 ? 100 : Math.round(((tasks.length - overdueCount) / tasks.length) * 100)
 
@@ -171,6 +174,59 @@ function Dashboard() {
     const result = await getAIPlan(tasks)
     setPlan(result)
     setPlanLoading(false)
+  }
+
+  const handleBreakdownGoal = async (e) => {
+    e.preventDefault()
+    if (!goalText || !goalDeadline || !currentUser) return
+    setGoalLoading(true)
+    setProposedSubtasks(null)
+    setGoalError('')
+    try {
+      const subtasks = await getGoalBreakdown(goalText, goalDeadline)
+      if (subtasks.length === 0) {
+        setGoalError('Gemini could not break this goal down. Try rephrasing it or widening the deadline.')
+      } else {
+        setProposedSubtasks(subtasks)
+      }
+    } catch (err) {
+      setGoalError('Something went wrong generating the breakdown.')
+    }
+    setGoalLoading(false)
+  }
+
+  const confirmCreateSubtasks = async () => {
+    if (!proposedSubtasks || !currentUser) return
+    const batch = writeBatch(db)
+    proposedSubtasks.forEach((subtask) => {
+      const ref = doc(collection(db, 'tasks'))
+      batch.set(ref, {
+        uid: currentUser.uid,
+        title: subtask.title,
+        deadline: subtask.deadline,
+        createdAt: serverTimestamp(),
+        sourceGoal: goalText,
+      })
+    })
+    try {
+      await batch.commit()
+      confetti({
+        particleCount: 120,
+        spread: 90,
+        origin: { y: 0.6 },
+        colors: ['#a78bfa', '#22d3ee', '#34d399'],
+      })
+      setProposedSubtasks(null)
+      setGoalText('')
+      setGoalDeadline('')
+    } catch (err) {
+      setGoalError('Failed to save subtasks to Firestore. Nothing was written — try again.')
+    }
+  }
+
+  const discardProposal = () => {
+    setProposedSubtasks(null)
+    setGoalError('')
   }
 
   if (!currentUser) {
@@ -286,6 +342,78 @@ function Dashboard() {
               {plan.motivation && (
                 <p className="text-emerald-300 text-sm italic">🔥 {plan.motivation}</p>
               )}
+            </div>
+          )}
+        </div>
+
+        {/* AI Goal Breakdown — autonomous subtask creation */}
+        <div className="bg-gradient-to-br from-cyan-500/10 to-emerald-500/10 border border-cyan-400/20 rounded-2xl p-6 mb-8">
+          <div className="flex items-center gap-2 mb-4">
+            <Target size={20} className="text-cyan-400" />
+            <h2 className="text-lg font-bold">Goal → AI Breakdown</h2>
+          </div>
+
+          {!proposedSubtasks && (
+            <form onSubmit={handleBreakdownGoal} className="flex flex-col md:flex-row gap-3">
+              <input
+                type="text"
+                placeholder="e.g. Finish my hackathon submission"
+                value={goalText}
+                onChange={(e) => setGoalText(e.target.value)}
+                className="flex-1 px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white outline-none focus:border-cyan-400/50 transition"
+                required
+              />
+              <input
+                type="datetime-local"
+                value={goalDeadline}
+                onChange={(e) => setGoalDeadline(e.target.value)}
+                className="px-4 py-2 rounded-lg bg-white/5 border border-white/10 text-white outline-none focus:border-cyan-400/50 transition"
+                required
+              />
+              <button
+                type="submit"
+                disabled={goalLoading}
+                className="flex items-center justify-center gap-2 px-5 py-2 rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400 text-gray-900 font-semibold hover:opacity-90 disabled:opacity-40 transition"
+              >
+                {goalLoading ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+                {goalLoading ? 'Breaking down...' : 'Break Down Goal'}
+              </button>
+            </form>
+          )}
+
+          {goalError && (
+            <p className="text-red-400 text-sm mt-3">{goalError}</p>
+          )}
+
+          {proposedSubtasks && (
+            <div className="flex flex-col gap-4">
+              <p className="text-slate-400 text-sm">
+                Gemini proposed {proposedSubtasks.length} subtasks for "{goalText}". Review before adding to your task list:
+              </p>
+              <div className="flex flex-col gap-2">
+                {proposedSubtasks.map((s, i) => (
+                  <div key={i} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
+                    <span className="text-slate-200 text-sm">{s.title}</span>
+                    <span className="text-cyan-300 text-xs font-mono shrink-0 ml-3">
+                      {new Date(s.deadline).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={confirmCreateSubtasks}
+                  className="flex items-center gap-2 px-5 py-2 rounded-full bg-gradient-to-r from-cyan-400 to-emerald-400 text-gray-900 font-semibold hover:opacity-90 transition"
+                >
+                  <CheckCircle2 size={16} /> Create {proposedSubtasks.length} Tasks
+                </button>
+                <button
+                  onClick={discardProposal}
+                  className="px-5 py-2 rounded-full border border-white/10 text-slate-300 hover:bg-white/5 transition"
+                >
+                  Discard
+                </button>
+              </div>
             </div>
           )}
         </div>
