@@ -17,4 +17,28 @@ Existing productivity tools rely on passive reminders that are easy to ignore. D
 - **Real-time sync** — all tasks update live across the UI via Firestore listeners
 - **Firebase Authentication** — per-user task isolation
 
-## How It's
+## How It's Agentic
+
+Most AI productivity tools only *suggest*. Deadline Guardian AI's goal-breakdown flow plans **and** executes: Gemini's output is parsed, validated (deadlines are clamped to the user's actual time window), shown to the user for approval, then atomically batch-written into the user's live task data — making the AI a participant in the data model, not just a chat window beside it.
+
+## Tech Stack
+
+- **Frontend:** React (Vite), Tailwind CSS, lucide-react, canvas-confetti
+- **Backend / Data:** Firebase Authentication, Cloud Firestore, Firebase Hosting
+- **AI:** Google Gemini API (`gemini-2.5-flash`)
+
+## Google Technologies Used
+
+- Gemini API — daily planning, free-form coaching, autonomous goal breakdown
+- Firebase Authentication
+- Cloud Firestore
+- Firebase Hosting
+
+## Getting Started
+
+```bash
+npm install
+npm run dev
+```
+
+Create a `.env` file with:
